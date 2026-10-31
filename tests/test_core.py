@@ -239,3 +239,22 @@ def test_llm_panel_partial_failure(monkeypatch):
     monkeypatch.setattr(L, "ask", fake_ask)
     v = L.review(SAMPLE, estratega_reglas.evaluate(SAMPLE))
     assert v["rating"] == "Alta" and len(v["panel"]) == 1 and v["failed"]
+
+
+def test_llm_panel_substitute(monkeypatch):
+    from futbot import estratega_llm as L
+    monkeypatch.setattr(config, "LLM_PROVIDER", "auto")
+    for k, v in dict(GEMINI_API_KEY="g", GROQ_API_KEY="q", OPENAI_COMPAT_API_KEY="z",
+                     CEREBRAS_API_KEY="", OPENROUTER_API_KEY="o").items():
+        monkeypatch.setattr(config, k, v)
+    calls = []
+
+    def fake_ask(prov, system, user):
+        calls.append(prov)
+        if prov == "glm":
+            raise RuntimeError("HTTP 404")
+        return {"rating": "Media", "confidence": 50, "summary": prov, "reasons": [], "red_flags": []}, "m"
+    monkeypatch.setattr(L, "ask", fake_ask)
+    v = L.review(SAMPLE, estratega_reglas.evaluate(SAMPLE))
+    assert len(v["panel"]) == 3 and "openrouter" in calls
+    assert {m["role"] for m in v["panel"]} == {"Matemático", "Táctico", "Abogado del diablo"}

@@ -28,7 +28,7 @@ GROQ_MODELS = os.getenv("GROQ_MODELS", "llama-3.3-70b-versatile,openai/gpt-oss-1
 CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
 CEREBRAS_MODELS = os.getenv("CEREBRAS_MODELS", "gpt-oss-120b,llama-3.3-70b")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-OPENROUTER_MODELS = os.getenv("OPENROUTER_MODELS", "openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free")
+OPENROUTER_MODELS = os.getenv("OPENROUTER_MODELS", "auto")  # auto = elige entre los gratis actuales
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 OPENAI_COMPAT_BASE_URL = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.z.ai/api/paas/v4")

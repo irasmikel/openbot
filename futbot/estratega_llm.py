@@ -30,7 +30,7 @@ OPENAI_LIKE = {
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "OPENROUTER_MODELS", "OpenRouter"),
     "glm": (None, "OPENAI_COMPAT_API_KEY", "OPENAI_COMPAT_MODEL", "GLM"),
 }
-PREFERENCE = ["gemini", "groq", "cerebras", "openrouter", "glm"]
+PREFERENCE = ["gemini", "groq", "glm", "cerebras", "openrouter"]
 
 ROLES = [
     ("🧮", "Matemático",
@@ -54,10 +54,11 @@ def _key(prov):
 
 
 def available():
+    """Todos los proveedores con clave (titulares primero, luego suplentes)."""
     if config.LLM_PROVIDER not in ("auto", "panel"):
         prov = {"openai_compat": "glm"}.get(config.LLM_PROVIDER, config.LLM_PROVIDER)
         return [prov] if prov in PREFERENCE and _key(prov) else []
-    return [p for p in PREFERENCE if _key(p)][:config.LLM_PANEL_SIZE]
+    return [p for p in PREFERENCE if _key(p)]
 
 
 def enabled():
@@ -148,6 +149,37 @@ def _call_gemini(system, user):
 
 
 # ------------------------------------------------------------------ APIs compatibles con OpenAI
+_OR_FREE = None
+
+
+def _openrouter_free_models():
+    """Lista actual de modelos gratuitos de OpenRouter (cambian a menudo)."""
+    global _OR_FREE
+    if _OR_FREE is None:
+        from .http import get_json
+        data = get_json("https://openrouter.ai/api/v1/models", timeout=15) or {}
+        free = [m["id"] for m in data.get("data", [])
+                if m.get("id", "").endswith(":free")
+                and str((m.get("pricing") or {}).get("prompt", "1")) in ("0", "0.0")]
+        pref = ("gpt-oss-120b", "llama-3.3-70b", "deepseek", "qwen3", "gemma", "mistral")
+
+        def score(i):
+            return next((n for n, p in enumerate(pref) if p in i), len(pref))
+        _OR_FREE = sorted(free, key=score)[:4]
+    return _OR_FREE
+
+
+def _models_for(prov, models_attr):
+    configured = [m.strip() for m in getattr(config, models_attr).split(",") if m.strip()]
+    if prov == "openrouter" and (not configured or configured == ["auto"]):
+        try:
+            return _openrouter_free_models()
+        except Exception as e:
+            log.warning("OpenRouter listado: %s", e)
+            return []
+    return configured
+
+
 def _call_openai_like(prov, system, user):
     base, key_attr, models_attr, label = OPENAI_LIKE[prov]
     base = base or config.OPENAI_COMPAT_BASE_URL
@@ -156,7 +188,10 @@ def _call_openai_like(prov, system, user):
     if prov == "openrouter":
         headers.update({"HTTP-Referer": "https://github.com/irasmikel/openbot", "X-Title": "futbot"})
     errors = []
-    for model in [m.strip() for m in getattr(config, models_attr).split(",") if m.strip()]:
+    models = _models_for(prov, models_attr)
+    if not models:
+        raise RuntimeError("sin modelos disponibles")
+    for model in models:
         for attempt in range(2):
             try:
                 body = {"model": model, "temperature": 0.2, "max_tokens": 900,
@@ -204,27 +239,45 @@ def review(payload, rules):
     except Exception as e:
         log.warning("prompt: %s", e)
         return None
-    multi = len(provs) > 1
-    jobs = {}
+    size = min(config.LLM_PANEL_SIZE, len(provs))
+    roles = ROLES[:size] if size > 1 else [("🤖", "Analista", None)]
+    starters, bench = provs[:len(roles)], provs[len(roles):]
     members, errors = [], []
-    with ThreadPoolExecutor(max_workers=len(provs)) as ex:
-        for i, prov in enumerate(provs):
-            icon, role, text = ROLES[i % len(ROLES)] if multi else ("🤖", "Analista", None)
-            jobs[ex.submit(ask, prov, _system_prompt(text), user)] = (prov, icon, role)
-        for fut in as_completed(jobs, timeout=config.LLM_TIMEOUT_S + 30):
-            prov, icon, role = jobs[fut]
+
+    def run(pairs):
+        """pairs: [(prov, role_tuple)] -> lista de roles que fallaron"""
+        failed = []
+        with ThreadPoolExecutor(max_workers=len(pairs)) as ex:
+            jobs = {ex.submit(ask, prov, _system_prompt(r[2]), user): (prov, r) for prov, r in pairs}
             try:
-                v, model = fut.result()
-                members.append({**v, "provider": prov, "model": model, "icon": icon, "role": role})
-            except Exception as e:
-                errors.append(f"{prov}: {str(e)[:180]}")
-                log.warning("Analista %s (%s) falló: %s", role, prov, e)
+                for fut in as_completed(jobs, timeout=config.LLM_TIMEOUT_S + 30):
+                    prov, r = jobs[fut]
+                    try:
+                        v, model = fut.result()
+                        members.append({**v, "provider": prov, "model": model, "icon": r[0], "role": r[1]})
+                    except Exception as e:
+                        errors.append(f"{prov}: {str(e)[:160]}")
+                        log.warning("Analista %s (%s) falló: %s", r[1], prov, e)
+                        failed.append(r)
+            except Exception as e:  # timeout global
+                errors.append(f"timeout: {e}")
+                done = {(m["provider"]) for m in members}
+                failed += [r for f, (prov, r) in jobs.items() if prov not in done and r not in failed]
+        return failed
+
+    failed_roles = run(list(zip(starters, roles)))
+    # suplentes ocupan los papeles que han fallado
+    while failed_roles and bench:
+        pairs = list(zip(bench, failed_roles))
+        bench = bench[len(pairs):]
+        failed_roles = failed_roles[len(pairs):] + run(pairs)
     if not members:
         LAST_ERROR = " | ".join(errors) or "sin respuesta"
         return None
     LAST_ERROR = " | ".join(errors) or None
     # orden estable según el papel
-    members.sort(key=lambda m: [r[1] for r in ROLES].index(m["role"]) if m["role"] in [r[1] for r in ROLES] else 0)
+    names = [r[1] for r in ROLES]
+    members.sort(key=lambda m: names.index(m["role"]) if m["role"] in names else 0)
     final = _panel_rating([m["rating"] for m in members])
     lead = next((m for m in members if m["rating"] == final), members[0])
 
