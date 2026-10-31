@@ -57,27 +57,54 @@ def _extract_json(text):
     return json.loads(m.group(0) if m else text)
 
 
+_GEMINI_MODEL_OK = None
+
+
+def _gemini_pick_model(key):
+    """Pregunta a Google qué modelos tiene esta clave y elige el Flash estable más reciente."""
+    from .http import get_json
+    data = get_json("https://generativelanguage.googleapis.com/v1beta/models",
+                    headers={"x-goog-api-key": key}, params={"pageSize": 200}, timeout=15) or {}
+    names = [m["name"].split("/")[-1] for m in data.get("models", [])
+             if "generateContent" in (m.get("supportedGenerationMethods") or [])]
+    if "gemini-flash-latest" in names:
+        return "gemini-flash-latest"
+
+    def score(n):
+        v = re.search(r"gemini-(\d+(?:\.\d+)?)-flash", n)
+        ver = float(v.group(1)) if v else 0
+        stable = not re.search(r"preview|exp|tts|image|audio|live|thinking", n)
+        lite = "lite" in n
+        return (stable, ver, not lite)
+    flash = sorted((n for n in names if "flash" in n), key=score, reverse=True)
+    if flash:
+        return flash[0]
+    raise RuntimeError(f"ningún modelo Flash disponible ({len(names)} modelos)")
+
+
 def _call_gemini(system, user):
-    """Clave de Google AI Studio (gratis). Las claves nuevas pueden empezar por 'AIza' o por 'AQ.'.
-    Se prueba primero AI Studio y, si no responde, Vertex AI."""
+    """Clave de Google AI Studio (gratis; puede empezar por 'AIza' o por 'AQ.').
+    Si el modelo configurado ya no existe, elige automáticamente el Flash más reciente."""
+    global _GEMINI_MODEL_OK
     key = config.GEMINI_API_KEY.strip()
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
         "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
     }
-    errors = []
-    for label, url in (
-        ("AI Studio", f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEMINI_MODEL}:generateContent"),
-        ("Vertex", f"https://aiplatform.googleapis.com/v1/publishers/google/models/{config.GEMINI_MODEL}:generateContent"),
-    ):
-        try:
-            data = post_json(url, body, headers={"x-goog-api-key": key}, timeout=45, label=f"Gemini ({label})")
-            parts = data["candidates"][0]["content"]["parts"]
-            return "".join(p.get("text", "") for p in parts if not p.get("thought"))
-        except Exception as e:
-            errors.append(str(e)[:160])
-    raise RuntimeError(" | ".join(errors))
+    model = _GEMINI_MODEL_OK or config.GEMINI_MODEL
+    url = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent"
+    try:
+        data = post_json(url.format(model), body, headers={"x-goog-api-key": key}, timeout=45, label=f"Gemini {model}")
+    except RuntimeError as e:
+        if "HTTP 404" not in str(e) and "HTTP 400" not in str(e):
+            raise
+        model = _gemini_pick_model(key)
+        log.info("Gemini: modelo configurado no disponible, uso %s", model)
+        data = post_json(url.format(model), body, headers={"x-goog-api-key": key}, timeout=45, label=f"Gemini {model}")
+    _GEMINI_MODEL_OK = model
+    parts = data["candidates"][0]["content"]["parts"]
+    return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
 
 def _call_github(system, user):
@@ -137,7 +164,7 @@ def review(payload, rules):
             v = _extract_json(calls.get(prov, _call_openai_compat)(system, user))
             if v.get("rating") not in ORDER:
                 raise ValueError(f"rating inválido: {v.get('rating')}")
-            v["by"] = f"llm:{prov}"
+            v["by"] = f"llm:{prov}" + (f" ({_GEMINI_MODEL_OK})" if prov == "gemini" and _GEMINI_MODEL_OK else "")
             LAST_ERROR = None
             return v
         except Exception as e:

@@ -38,7 +38,7 @@ jobs:
           APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
           LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'auto' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-flash-latest' }}
           OPENAI_COMPAT_BASE_URL: ${{ vars.OPENAI_COMPAT_BASE_URL || 'https://api.z.ai/api/paas/v4' }}
           OPENAI_COMPAT_MODEL: ${{ vars.OPENAI_COMPAT_MODEL || 'glm-4.5-flash' }}
           OPENAI_COMPAT_API_KEY: ${{ secrets.OPENAI_COMPAT_API_KEY }}
