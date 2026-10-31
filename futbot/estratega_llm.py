@@ -64,13 +64,22 @@ def _call_gemini(system, user):
 
 
 def _call_github(system, user):
-    """GitHub Models: gratis con el GITHUB_TOKEN de Actions (permiso models: read)."""
-    body = {"model": config.GITHUB_MODEL, "temperature": 0.2,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-    headers = {"Authorization": f"Bearer {config.GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
-    data = post_json("https://models.github.ai/inference/chat/completions", body, headers=headers,
-                     timeout=45, label="GitHub Models")
-    return data["choices"][0]["message"]["content"]
+    """GitHub Models: gratis con el GITHUB_TOKEN de Actions (permiso models: read).
+    Prueba el endpoint nuevo y, si no responde bien, el clásico de Azure."""
+    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    headers = {"Authorization": f"Bearer {config.GITHUB_TOKEN}", "Content-Type": "application/json"}
+    errors = []
+    for url, model in (("https://models.github.ai/inference/chat/completions", config.GITHUB_MODEL),
+                       ("https://models.inference.ai.azure.com/chat/completions", config.GITHUB_MODEL.split("/")[-1])):
+        try:
+            data = post_json(url, {"model": model, "temperature": 0.2, "messages": msgs},
+                             headers=headers, timeout=45, label="GitHub Models")
+            if data.get("choices"):
+                return data["choices"][0]["message"]["content"]
+            errors.append(f"{url.split('/')[2]}: {str(data)[:150]}")
+        except Exception as e:
+            errors.append(f"{url.split('/')[2]}: {str(e)[:150]}")
+    raise RuntimeError(" | ".join(errors))
 
 
 def _call_anthropic(system, user):
