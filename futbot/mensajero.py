@@ -107,8 +107,11 @@ def format_alert(payload, rules, llm=None, final_rating=None, llm_pending=False,
 
     if llm:
         L += ["", f"🤖 <b>IA: {RATING_ICON.get(llm['rating'], '')} {_e(llm['rating'])}</b> "
-                  f"(confianza {_e(llm.get('confidence'))}%)",
-              f"<i>{_e(llm.get('summary'))}</i>"]
+                  f"(confianza {_e(llm.get('confidence'))}%)"]
+        if len(llm.get("panel") or []) > 1:
+            L.append("👥 " + " · ".join(f"{m['icon']} {_e(m['role'])}: {RATING_ICON.get(m['rating'], '')}"
+                                        for m in llm["panel"]))
+        L.append(f"<i>{_e(llm.get('summary'))}</i>")
         if llm.get("market") and llm["rating"] != "Descartar":
             L.append(f"🎯 IA: {_e(llm['market'])}" + (f" ≥ {_e(llm.get('min_odds'))}" if llm.get("min_odds") else ""))
         for f in (llm.get("red_flags") or [])[:2]:

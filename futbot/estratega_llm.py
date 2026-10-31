@@ -1,9 +1,20 @@
-"""AGENTE 2b · Estratega LLM. Revisa el payload + veredicto de reglas con el system prompt
-conservador (prompts/estratega_system.md). Proveedores: Gemini (gratis) o cualquier API
-compatible con OpenAI (GLM de Z.ai, OpenRouter, Ollama, LM Studio...)."""
+"""AGENTE 2b · Panel de analistas IA (todos GRATIS).
+
+Cada proveedor con clave configurada es un analista con un papel distinto. Analizan en paralelo
+el payload + veredicto de reglas con el system prompt conservador (prompts/estratega_system.md)
+y el veredicto del panel es la MEDIANA PRUDENTE de sus opiniones (2 de 3 "Descartar" → Descartar).
+
+Proveedores (secret de GitHub → proveedor):
+  GEMINI_API_KEY        → Google AI Studio (Gemini Flash)
+  GROQ_API_KEY          → Groq (Llama 3.3 70B / gpt-oss)
+  CEREBRAS_API_KEY      → Cerebras (Llama / gpt-oss)
+  OPENROUTER_API_KEY    → OpenRouter (modelos ':free')
+  OPENAI_COMPAT_API_KEY → GLM de Z.ai (u otra API compatible con OpenAI)"""
 import json
 import logging
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from . import config
 from .http import post_json
@@ -12,35 +23,51 @@ log = logging.getLogger(__name__)
 ORDER = {"Descartar": 0, "Media": 1, "Alta": 2}
 LAST_ERROR = None
 
+# nombre -> (base_url, atributo de clave en config, atributo de modelos en config, etiqueta)
+OPENAI_LIKE = {
+    "groq": ("https://api.groq.com/openai/v1", "GROQ_API_KEY", "GROQ_MODELS", "Groq"),
+    "cerebras": ("https://api.cerebras.ai/v1", "CEREBRAS_API_KEY", "CEREBRAS_MODELS", "Cerebras"),
+    "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "OPENROUTER_MODELS", "OpenRouter"),
+    "glm": (None, "OPENAI_COMPAT_API_KEY", "OPENAI_COMPAT_MODEL", "GLM"),
+}
+PREFERENCE = ["gemini", "groq", "cerebras", "openrouter", "glm"]
 
-def _available():
-    """Proveedores con clave, en orden de preferencia."""
-    if config.LLM_PROVIDER != "auto":
-        return [config.LLM_PROVIDER]
-    out = []
-    if config.OPENAI_COMPAT_API_KEY:
-        out.append("openai_compat")
-    if config.GEMINI_API_KEY:
-        out.append("gemini")
-    return out
+ROLES = [
+    ("🧮", "Matemático",
+     "TU PAPEL: analista MATEMÁTICO. Céntrate en probabilidades, cuota mínima y valor esperado. "
+     "¿El precio compensa el riesgo? Si no hay cuota en vivo, sé condicional."),
+    ("⚽", "Táctico",
+     "TU PAPEL: analista TÁCTICO. Céntrate en el juego: quién dominaba, si el dominio es real "
+     "(tiros a puerta, ocasiones) o solo posesión, contexto local/visitante y marcador."),
+    ("😈", "Abogado del diablo",
+     "TU PAPEL: ABOGADO DEL DIABLO. Tu trabajo es encontrar motivos para NO apostar: trampas, "
+     "datos que faltan, muestras pequeñas, cuotas ya ajustadas. Solo da 'Media' o 'Alta' si no "
+     "encuentras ninguna objeción seria."),
+]
+
+
+# ------------------------------------------------------------------ proveedores disponibles
+def _key(prov):
+    if prov == "gemini":
+        return config.GEMINI_API_KEY
+    return getattr(config, OPENAI_LIKE[prov][1], "")
+
+
+def available():
+    if config.LLM_PROVIDER not in ("auto", "panel"):
+        prov = {"openai_compat": "glm"}.get(config.LLM_PROVIDER, config.LLM_PROVIDER)
+        return [prov] if prov in PREFERENCE and _key(prov) else []
+    return [p for p in PREFERENCE if _key(p)][:config.LLM_PANEL_SIZE]
 
 
 def enabled():
-    if config.LLM_PROVIDER == "auto":
-        return bool(_available())
-    if config.LLM_PROVIDER == "github":
-        return bool(config.GITHUB_TOKEN)
-    if config.LLM_PROVIDER == "anthropic":
-        return bool(config.ANTHROPIC_API_KEY)
-    if config.LLM_PROVIDER == "gemini":
-        return bool(config.GEMINI_API_KEY)
-    if config.LLM_PROVIDER == "openai_compat":
-        return bool(config.OPENAI_COMPAT_API_KEY) or "localhost" in config.OPENAI_COMPAT_BASE_URL
-    return False
+    return bool(available())
 
 
-def _system_prompt():
-    return (config.PROMPTS_DIR / "estratega_system.md").read_text(encoding="utf-8")
+# ------------------------------------------------------------------ prompts
+def _system_prompt(role_text=None):
+    base = (config.PROMPTS_DIR / "estratega_system.md").read_text(encoding="utf-8")
+    return base + ("\n\n" + role_text if role_text else "")
 
 
 def _user_content(payload, rules):
@@ -51,12 +78,18 @@ def _user_content(payload, rules):
 
 
 def _extract_json(text):
-    text = text.strip()
+    text = (text or "").strip()
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)  # modelos que "piensan en voz alta"
     text = re.sub(r"^```(?:json)?|```$", "", text, flags=re.M).strip()
     m = re.search(r"\{.*\}", text, flags=re.S)
     return json.loads(m.group(0) if m else text)
 
 
+def _busy(msg):
+    return any(c in msg for c in ("HTTP 503", "HTTP 429", "HTTP 500", "HTTP 502"))
+
+
+# ------------------------------------------------------------------ Gemini
 _GEMINI_MODEL_OK = None
 
 
@@ -77,29 +110,16 @@ def _gemini_models(key):
                   key=score, reverse=True)
 
 
-def _gemini_pick_model(key):
-    models = _gemini_models(key)
-    if not models:
-        raise RuntimeError("ningún modelo Flash disponible")
-    return models[0]
-
-
 def _call_gemini(system, user):
-    """Clave de Google AI Studio (gratis; puede empezar por 'AIza' o por 'AQ.').
-    - Si el modelo no existe (404) elige el Flash más reciente disponible.
-    - Si está saturado (503/429/500) reintenta y prueba otros modelos Flash."""
     global _GEMINI_MODEL_OK
-    import time
     key = config.GEMINI_API_KEY.strip()
-    body = {
-        "systemInstruction": {"parts": [{"text": system}]},
-        "contents": [{"role": "user", "parts": [{"text": user}]}],
-        "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
-    }
+    body = {"systemInstruction": {"parts": [{"text": system}]},
+            "contents": [{"role": "user", "parts": [{"text": user}]}],
+            "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
     url = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent"
     queue = [_GEMINI_MODEL_OK or config.GEMINI_MODEL]
     tried, errors, listed = set(), [], False
-    while queue and len(tried) < 5:
+    while queue and len(tried) < 4:
         model = queue.pop(0)
         if model in tried:
             continue
@@ -107,18 +127,17 @@ def _call_gemini(system, user):
         for attempt in range(2):
             try:
                 data = post_json(url.format(model), body, headers={"x-goog-api-key": key},
-                                 timeout=45, label=f"Gemini {model}")
+                                 timeout=40, label=f"Gemini {model}")
                 parts = data["candidates"][0]["content"]["parts"]
                 _GEMINI_MODEL_OK = model
-                return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+                return "".join(p.get("text", "") for p in parts if not p.get("thought")), model
             except Exception as e:
                 msg = str(e)
-                busy = any(c in msg for c in ("HTTP 503", "HTTP 429", "HTTP 500"))
-                if busy and attempt == 0:
+                if _busy(msg) and attempt == 0:
                     time.sleep(3)
                     continue
                 errors.append(msg[:140])
-                if (busy or "HTTP 404" in msg or "HTTP 400" in msg) and not listed:
+                if (_busy(msg) or "HTTP 404" in msg or "HTTP 400" in msg) and not listed:
                     listed = True
                     try:
                         queue += [m for m in _gemini_models(key) if m not in tried]
@@ -128,53 +147,28 @@ def _call_gemini(system, user):
     raise RuntimeError(" | ".join(errors[-2:]))
 
 
-def _call_github(system, user):
-    """GitHub Models: gratis con el GITHUB_TOKEN de Actions (permiso models: read).
-    Prueba el endpoint nuevo y, si no responde bien, el clásico de Azure."""
-    msgs = [{"role": "system", "content": system}, {"role": "user", "content": user}]
-    headers = {"Authorization": f"Bearer {config.GITHUB_TOKEN}", "Content-Type": "application/json"}
+# ------------------------------------------------------------------ APIs compatibles con OpenAI
+def _call_openai_like(prov, system, user):
+    base, key_attr, models_attr, label = OPENAI_LIKE[prov]
+    base = base or config.OPENAI_COMPAT_BASE_URL
+    key = getattr(config, key_attr).strip()
+    headers = {"Authorization": f"Bearer {key}"}
+    if prov == "openrouter":
+        headers.update({"HTTP-Referer": "https://github.com/irasmikel/openbot", "X-Title": "futbot"})
     errors = []
-    for url, model in (("https://models.github.ai/inference/chat/completions", config.GITHUB_MODEL),
-                       ("https://models.inference.ai.azure.com/chat/completions", config.GITHUB_MODEL.split("/")[-1])):
-        try:
-            data = post_json(url, {"model": model, "temperature": 0.2, "messages": msgs},
-                             headers=headers, timeout=45, label="GitHub Models")
-            if data.get("choices"):
-                return data["choices"][0]["message"]["content"]
-            errors.append(f"{url.split('/')[2]}: {str(data)[:150]}")
-        except Exception as e:
-            errors.append(f"{url.split('/')[2]}: {str(e)[:150]}")
-    raise RuntimeError(" | ".join(errors))
-
-
-def _call_anthropic(system, user):
-    body = {"model": config.ANTHROPIC_MODEL, "max_tokens": 1000, "temperature": 0.2,
-            "system": system, "messages": [{"role": "user", "content": user}]}
-    headers = {"x-api-key": config.ANTHROPIC_API_KEY.strip(), "anthropic-version": "2023-06-01",
-               "content-type": "application/json"}
-    data = post_json("https://api.anthropic.com/v1/messages", body, headers=headers, timeout=45, label="Claude")
-    return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
-
-
-def _call_openai_compat(system, user):
-    """GLM de Z.ai (gratis: glm-4.5-flash / glm-4.7-flash) u otra API compatible con OpenAI.
-    OPENAI_COMPAT_MODEL admite varios modelos separados por comas: se prueban en orden."""
-    import time
-    url = config.OPENAI_COMPAT_BASE_URL.rstrip("/") + "/chat/completions"
-    headers = {"Authorization": f"Bearer {config.OPENAI_COMPAT_API_KEY.strip()}"}
-    errors = []
-    for model in [m.strip() for m in config.OPENAI_COMPAT_MODEL.split(",") if m.strip()]:
+    for model in [m.strip() for m in getattr(config, models_attr).split(",") if m.strip()]:
         for attempt in range(2):
             try:
-                body = {"model": model, "temperature": 0.2,
+                body = {"model": model, "temperature": 0.2, "max_tokens": 900,
                         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-                data = post_json(url, body, headers=headers, timeout=60, label=f"GLM {model}")
+                data = post_json(base.rstrip("/") + "/chat/completions", body, headers=headers,
+                                 timeout=45, label=f"{label} {model}")
                 if not data.get("choices"):
                     raise RuntimeError(str(data)[:150])
-                return data["choices"][0]["message"]["content"]
+                return data["choices"][0]["message"]["content"], model
             except Exception as e:
                 msg = str(e)
-                if attempt == 0 and any(c in msg for c in ("HTTP 429", "HTTP 503", "HTTP 500")):
+                if attempt == 0 and _busy(msg):
                     time.sleep(3)
                     continue
                 errors.append(msg[:140])
@@ -182,37 +176,98 @@ def _call_openai_compat(system, user):
     raise RuntimeError(" | ".join(errors[-2:]))
 
 
+def ask(prov, system, user):
+    """Pregunta a un proveedor. Devuelve (veredicto_dict, modelo)."""
+    raw, model = _call_gemini(system, user) if prov == "gemini" else _call_openai_like(prov, system, user)
+    v = _extract_json(raw)
+    if v.get("rating") not in ORDER:
+        raise ValueError(f"rating inválido: {v.get('rating')}")
+    return v, model
+
+
+# ------------------------------------------------------------------ panel
+def _panel_rating(ratings):
+    """Mediana prudente: ordena de más prudente a menos y coge la posición central (baja)."""
+    s = sorted(ratings, key=lambda r: ORDER[r])
+    return s[(len(s) - 1) // 2]
+
+
 def review(payload, rules):
-    """Devuelve el veredicto del LLM o None si falla. Nunca bloquea la alerta."""
-    if not enabled():
+    """Consulta al panel en paralelo. Devuelve un veredicto agregado o None si nadie responde.
+    Nunca bloquea la alerta: el Mensajero ya la ha enviado antes."""
+    global LAST_ERROR
+    provs = available()
+    if not provs:
         return None
     try:
-        system, user = _system_prompt(), _user_content(payload, rules)
+        user = _user_content(payload, rules)
     except Exception as e:
         log.warning("prompt: %s", e)
         return None
-    global LAST_ERROR
-    errors = []
-    calls = {"github": _call_github, "anthropic": _call_anthropic, "gemini": _call_gemini,
-             "openai_compat": _call_openai_compat}
-    for prov in _available():
+    multi = len(provs) > 1
+    jobs = {}
+    members, errors = [], []
+    with ThreadPoolExecutor(max_workers=len(provs)) as ex:
+        for i, prov in enumerate(provs):
+            icon, role, text = ROLES[i % len(ROLES)] if multi else ("🤖", "Analista", None)
+            jobs[ex.submit(ask, prov, _system_prompt(text), user)] = (prov, icon, role)
+        for fut in as_completed(jobs, timeout=config.LLM_TIMEOUT_S + 30):
+            prov, icon, role = jobs[fut]
+            try:
+                v, model = fut.result()
+                members.append({**v, "provider": prov, "model": model, "icon": icon, "role": role})
+            except Exception as e:
+                errors.append(f"{prov}: {str(e)[:180]}")
+                log.warning("Analista %s (%s) falló: %s", role, prov, e)
+    if not members:
+        LAST_ERROR = " | ".join(errors) or "sin respuesta"
+        return None
+    LAST_ERROR = " | ".join(errors) or None
+    # orden estable según el papel
+    members.sort(key=lambda m: [r[1] for r in ROLES].index(m["role"]) if m["role"] in [r[1] for r in ROLES] else 0)
+    final = _panel_rating([m["rating"] for m in members])
+    lead = next((m for m in members if m["rating"] == final), members[0])
+
+    def uniq(key, n):
+        out = []
+        for m in members:
+            for x in m.get(key) or []:
+                if x and x not in out:
+                    out.append(x)
+        return out[:n]
+    return {
+        "rating": final,
+        "confidence": round(sum(int(m.get("confidence") or 0) for m in members) / len(members)),
+        "market": lead.get("market"),
+        "min_odds": lead.get("min_odds"),
+        "summary": lead.get("summary"),
+        "reasons": uniq("reasons", 3),
+        "red_flags": uniq("red_flags", 3),
+        "panel": [{"icon": m["icon"], "role": m["role"], "rating": m["rating"],
+                   "provider": m["provider"], "model": m["model"], "summary": m.get("summary")}
+                  for m in members],
+        "failed": errors,
+        "by": "panel:" + "+".join(m["provider"] for m in members),
+    }
+
+
+def ping_all():
+    """Diagnóstico: prueba cada proveedor por separado con una pregunta mínima."""
+    out = []
+    sysmsg = 'Responde SOLO con este JSON: {"rating":"Media","confidence":50,"summary":"ok","reasons":[],"red_flags":[]}'
+    for prov in [p for p in PREFERENCE if _key(p)]:
+        t = time.time()
         try:
-            v = _extract_json(calls.get(prov, _call_openai_compat)(system, user))
-            if v.get("rating") not in ORDER:
-                raise ValueError(f"rating inválido: {v.get('rating')}")
-            v["by"] = f"llm:{prov}" + (f" ({_GEMINI_MODEL_OK})" if prov == "gemini" and _GEMINI_MODEL_OK else "")
-            LAST_ERROR = None
-            return v
+            v, model = ask(prov, sysmsg, "ping")
+            out.append((True, prov, f"{model} ({time.time() - t:.1f}s)"))
         except Exception as e:
-            errors.append(f"{prov}: {str(e)[:200]}")
-            log.warning("Estratega LLM (%s) falló: %s", prov, e)
-    LAST_ERROR = " | ".join(errors) or "sin proveedor con clave"
-    return None
+            out.append((False, prov, str(e)[:200]))
+    return out
 
 
 def combine(rules, llm):
-    """Política conservadora: manda el más prudente, salvo que el LLM suba un nivel
-    citando razones (lo exige su prompt) y las reglas no lo hayan descartado."""
+    """Política conservadora: manda el más prudente, salvo que el panel suba un nivel
+    citando razones y las reglas no lo hayan descartado."""
     if not llm:
         return rules["rating"]
     r, l = ORDER[rules["rating"]], ORDER[llm["rating"]]

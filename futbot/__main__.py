@@ -60,17 +60,20 @@ def diagnose():
         check("API-Football", lambda: f"{len(apifootball.fixtures_for_date())} partidos hoy · quedan {apifootball.remaining()} peticiones de presupuesto")
     else:
         out.append("➖ API-Football: sin clave (opcional)")
-    if estratega_llm.enabled():
-        def llm_ping():
+    pings = estratega_llm.ping_all()
+    for ok, prov, msg in pings:
+        out.append(f"{'✅' if ok else '❌'} IA {html.escape(prov)}: {html.escape(msg)}")
+    if not pings:
+        out.append("➖ IA: ninguna clave configurada (el bot funciona solo con reglas)")
+    elif any(ok for ok, _, _ in pings):
+        def panel():
             p = sample_payload()
             from . import estratega_reglas
             v = estratega_llm.review(p, estratega_reglas.evaluate(p))
             if not v:
-                raise RuntimeError(estratega_llm.LAST_ERROR or "sin respuesta válida")
-            return f"{v['by']} → {v['rating']}"
-        check("LLM", llm_ping)
-    else:
-        out.append("➖ LLM: sin clave gratuita configurada (GEMINI_API_KEY de AI Studio u OPENAI_COMPAT_API_KEY de Z.ai). Funciona solo con reglas")
+                raise RuntimeError(estratega_llm.LAST_ERROR or "sin respuesta")
+            return " · ".join(f"{m['role']}={m['rating']}" for m in v["panel"]) + f" → {v['rating']}"
+        check("Panel IA (alerta de prueba)", panel)
     text = "\n".join(out)
     print(text)
     try:

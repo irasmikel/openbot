@@ -202,3 +202,40 @@ def test_espn_parsing(monkeypatch):
     assert espn.goals(401) == [{"minute": 12, "is_home": False}]
     o = espn.odds(401)["1x2"]
     assert o["1"]["initial"] == 1.25 and o["2"]["initial"] == 10.0
+
+
+def test_llm_panel(monkeypatch):
+    from futbot import estratega_llm as L
+    monkeypatch.setattr(config, "LLM_PROVIDER", "auto")
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "g")
+    monkeypatch.setattr(config, "GROQ_API_KEY", "q")
+    monkeypatch.setattr(config, "CEREBRAS_API_KEY", "c")
+    answers = {"gemini": "Media", "groq": "Alta", "cerebras": "Descartar"}
+
+    def fake_ask(prov, system, user):
+        assert "TU PAPEL" in system
+        return {"rating": answers[prov], "confidence": 60, "summary": prov, "reasons": [prov], "red_flags": []}, "m"
+    monkeypatch.setattr(L, "ask", fake_ask)
+    v = L.review(SAMPLE, estratega_reglas.evaluate(SAMPLE))
+    assert v["rating"] == "Media" and len(v["panel"]) == 3
+    assert [m["role"] for m in v["panel"]] == ["Matemático", "Táctico", "Abogado del diablo"]
+    answers.update(gemini="Descartar")
+    assert L.review(SAMPLE, estratega_reglas.evaluate(SAMPLE))["rating"] == "Descartar"
+
+
+def test_llm_panel_partial_failure(monkeypatch):
+    from futbot import estratega_llm as L
+    monkeypatch.setattr(config, "LLM_PROVIDER", "auto")
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "g")
+    monkeypatch.setattr(config, "GROQ_API_KEY", "q")
+    monkeypatch.setattr(config, "CEREBRAS_API_KEY", "")
+    monkeypatch.setattr(config, "OPENROUTER_API_KEY", "")
+    monkeypatch.setattr(config, "OPENAI_COMPAT_API_KEY", "")
+
+    def fake_ask(prov, system, user):
+        if prov == "gemini":
+            raise RuntimeError("HTTP 503 saturado")
+        return {"rating": "Alta", "confidence": 70, "summary": "ok", "reasons": ["a", "b"], "red_flags": []}, "m"
+    monkeypatch.setattr(L, "ask", fake_ask)
+    v = L.review(SAMPLE, estratega_reglas.evaluate(SAMPLE))
+    assert v["rating"] == "Alta" and len(v["panel"]) == 1 and v["failed"]

@@ -18,14 +18,17 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 APIFOOTBALL_KEY = os.getenv("APIFOOTBALL_KEY", "")
 
-# LLM del Estratega. Por defecto "auto": usa GRATIS lo que tenga clave, en este orden:
-#   GLM de Z.ai (OPENAI_COMPAT_API_KEY) -> Gemini de AI Studio (GEMINI_API_KEY, empieza por AIza)
-# Otros valores: "openai_compat" | "gemini" | "anthropic" (de pago) | "none"
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
-GITHUB_MODEL = os.getenv("GITHUB_MODEL", "openai/gpt-4o-mini")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-5-5")
+# Panel de analistas IA (todos gratis). "auto"/"panel" = usa todos los que tengan clave (hasta LLM_PANEL_SIZE).
+# Un valor concreto ("gemini", "groq", "cerebras", "openrouter", "glm") usa solo ese.
 LLM_PROVIDER = (os.getenv("LLM_PROVIDER") or "auto").lower()
+LLM_PANEL_SIZE = int(os.getenv("LLM_PANEL_SIZE", "3"))
+LLM_TIMEOUT_S = int(os.getenv("LLM_TIMEOUT_S", "90"))
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_MODELS = os.getenv("GROQ_MODELS", "llama-3.3-70b-versatile,openai/gpt-oss-120b")
+CEREBRAS_API_KEY = os.getenv("CEREBRAS_API_KEY", "")
+CEREBRAS_MODELS = os.getenv("CEREBRAS_MODELS", "gpt-oss-120b,llama-3.3-70b")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_MODELS = os.getenv("OPENROUTER_MODELS", "openai/gpt-oss-120b:free,meta-llama/llama-3.3-70b-instruct:free")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 OPENAI_COMPAT_BASE_URL = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.z.ai/api/paas/v4")
