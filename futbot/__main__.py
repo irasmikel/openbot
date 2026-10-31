@@ -52,6 +52,22 @@ def diagnose():
             raise RuntimeError(f"NO actualiza: {len(started)} partidos ya empezados siguen 'programados'. {sample}")
         return f"{len(started) - len(stale)}/{len(started)} empezados con datos en vivo. {sample}"
     check("ESPN ¿actualiza en directo?", espn_fresh)
+
+    def reds_today():
+        found = []
+        for mid, ev in list(espn._EVENTS.items()):
+            reds = espn.red_cards(mid)
+            if not reds:
+                continue
+            comp = (ev.get("competitions") or [{}])[0]
+            names = {c.get("homeAway"): (c.get("team") or {}).get("shortDisplayName") or (c.get("team") or {}).get("displayName")
+                     for c in comp.get("competitors", [])}
+            for r in reds:
+                tag = "→ HABRÍA ALERTADO" if (r["minute"] or 99) <= config.MAX_RED_MINUTE else "(después del 30)"
+                found.append(f"{names.get('home')}-{names.get('away')}: roja min {r['minute']} a "
+                             f"{'local' if r['is_home'] else 'visitante'} ({r['player']}) {tag}")
+        return "; ".join(dict.fromkeys(found)) or "ninguna roja en los partidos de hoy"
+    check("Rojas detectadas hoy (ESPN)", reds_today)
     if config.FOOTBALL_DATA_TOKEN:
         def fd():
             from .http import get_json
