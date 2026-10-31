@@ -1,0 +1,55 @@
+name: Scout (rojas tempranas)
+
+on:
+  schedule:
+    # cada 20 min entre 09:00 y 21:59 UTC (10:00-22:59 hora española en invierno).
+    # Si no hay partidos de las 7 competiciones en los próximos 40', la ejecución acaba en segundos.
+    - cron: "7,27,47 9-21 * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "Qué ejecutar"
+        type: choice
+        options: [watch, diagnose, test-alert]
+        default: diagnose
+
+concurrency:
+  group: scout
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Ejecutar
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}
+          LLM_PROVIDER: ${{ vars.LLM_PROVIDER || 'gemini' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ vars.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          OPENAI_COMPAT_BASE_URL: ${{ vars.OPENAI_COMPAT_BASE_URL || 'https://api.z.ai/api/paas/v4' }}
+          OPENAI_COMPAT_MODEL: ${{ vars.OPENAI_COMPAT_MODEL || 'glm-4.5-flash' }}
+          OPENAI_COMPAT_API_KEY: ${{ secrets.OPENAI_COMPAT_API_KEY }}
+        run: python -m futbot ${{ inputs.mode || 'watch' }}
+      - name: Guardar registro de alertas
+        if: always()
+        run: |
+          git config user.name "futbot"
+          git config user.email "futbot@users.noreply.github.com"
+          git add data/ || true
+          if ! git diff --cached --quiet; then
+            git commit -m "data: registro $(date -u +%F_%H%M)"
+            git pull --rebase --autostash && git push
+          fi

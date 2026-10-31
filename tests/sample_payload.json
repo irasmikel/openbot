@@ -1,0 +1,109 @@
+{
+  "schema": "trigger_payload/v2",
+  "detected_at": "2026-10-31T15:21:40+00:00",
+  "source": "test",
+  "match_id": 0,
+  "af_fixture_id": null,
+  "competition_id": 8,
+  "competition": "LaLiga",
+  "home": "Equipo Local (simulado)",
+  "away": "Equipo Visitante (simulado)",
+  "home_score": 0,
+  "away_score": 0,
+  "score": {
+    "home": 0,
+    "away": 0
+  },
+  "minute": 19,
+  "minute_now": 19,
+  "red_card": {
+    "minute": 18,
+    "added": 0,
+    "is_home": false,
+    "card_type": "roja_directa",
+    "player": "Defensa Simulado",
+    "sent_off_team": "Equipo Visitante (simulado)"
+  },
+  "reds_count": {
+    "home": 0,
+    "away": 1
+  },
+  "team_with_advantage": {
+    "name": "Equipo Local (simulado)",
+    "is_home": true,
+    "player_diff": 1
+  },
+  "stats_at_detection": {
+    "home": {
+      "possession": 61,
+      "xg": 0.74,
+      "shots_total": 7,
+      "shots_on_target": 3,
+      "corners": 4,
+      "big_chances": 1,
+      "dangerous_attacks": null
+    },
+    "away": {
+      "possession": 39,
+      "xg": 0.18,
+      "shots_total": 2,
+      "shots_on_target": 0,
+      "corners": 1,
+      "big_chances": 0,
+      "dangerous_attacks": null
+    }
+  },
+  "odds_prematch": {
+    "source": "API-Football · Bwin",
+    "1x2": {
+      "1": 1.95,
+      "X": 3.5,
+      "2": 4.1
+    },
+    "dc": {
+      "1X": 1.28,
+      "12": 1.33,
+      "X2": 1.9
+    },
+    "ou": {
+      "2.5": {
+        "Over": 1.95,
+        "Under": 1.85
+      }
+    }
+  },
+  "odds_live": {
+    "source": "SofaScore (actual)",
+    "1x2": {
+      "1": 1.4,
+      "X": 4.6,
+      "2": 9.0
+    },
+    "dc": {
+      "1X": 1.1,
+      "X2": 3.1
+    },
+    "ou": {
+      "1.5": {
+        "Over": 1.36
+      },
+      "2.5": {
+        "Over": 1.95
+      }
+    }
+  },
+  "data_quality": {
+    "has_stats": true,
+    "has_xg": true,
+    "has_prematch_odds": true,
+    "has_live_odds": true,
+    "detection_delay_min": 1
+  },
+  "trigger_type": "roja_temprana",
+  "event_minute": 18,
+  "target_team": {
+    "name": "Equipo Local (simulado)",
+    "is_home": true
+  },
+  "favorite": null
+}

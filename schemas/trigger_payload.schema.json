@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "trigger_payload/v1 — Scout → Estratega",
+  "type": "object",
+  "required": ["schema", "detected_at", "source", "competition", "home", "away", "score", "red_card", "team_with_advantage", "data_quality"],
+  "properties": {
+    "schema": {"const": "trigger_payload/v1"},
+    "detected_at": {"type": "string", "format": "date-time"},
+    "source": {"enum": ["sofascore", "apifootball", "test"]},
+    "match_id": {"type": ["integer", "null"], "description": "id SofaScore"},
+    "af_fixture_id": {"type": ["integer", "null"], "description": "id API-Football"},
+    "competition_id": {"type": ["integer", "null"]},
+    "competition": {"type": "string"},
+    "home": {"type": "string"},
+    "away": {"type": "string"},
+    "score": {"type": "object", "properties": {"home": {"type": "integer"}, "away": {"type": "integer"}}},
+    "minute_now": {"type": ["integer", "null"]},
+    "red_card": {
+      "type": "object",
+      "required": ["minute", "is_home", "card_type"],
+      "properties": {
+        "minute": {"type": "integer", "maximum": 30},
+        "added": {"type": "integer"},
+        "is_home": {"type": "boolean", "description": "true si el expulsado es del local"},
+        "card_type": {"enum": ["roja_directa", "doble_amarilla"]},
+        "player": {"type": ["string", "null"]},
+        "sent_off_team": {"type": "string"}
+      }
+    },
+    "reds_count": {"type": "object"},
+    "team_with_advantage": {
+      "type": "object",
+      "properties": {"name": {"type": "string"}, "is_home": {"type": "boolean"}, "player_diff": {"type": "integer"}}
+    },
+    "stats_at_detection": {
+      "type": ["object", "null"],
+      "description": "home/away: possession, xg, shots_total, shots_on_target, corners, big_chances, dangerous_attacks (null si no hay dato)"
+    },
+    "odds_prematch": {"type": ["object", "null"], "description": "{source, 1x2:{1,X,2}, dc:{1X,12,X2}, ou:{'2.5':{Over,Under}}}"},
+    "odds_live": {"type": ["object", "null"], "description": "mismo formato; cuotas de referencia en el momento de detectar"},
+    "data_quality": {"type": "object"}
+  }
+}

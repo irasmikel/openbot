@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "verdict/v1 — Estratega → Mensajero",
+  "type": "object",
+  "required": ["rating", "markets", "reasons", "red_flags"],
+  "properties": {
+    "by": {"type": "string", "description": "'reglas' o 'llm:<proveedor>'"},
+    "rating": {"enum": ["Alta", "Media", "Descartar"]},
+    "score_0_100": {"type": "integer"},
+    "dominance_index": {"type": ["number", "null"], "description": "0-1, dominio previo del equipo con 11"},
+    "p_eleven_prematch": {"type": ["number", "null"]},
+    "markets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "market": {"type": "string"},
+          "p_model": {"type": "number"},
+          "fair_odds": {"type": "number"},
+          "min_odds": {"type": "number", "description": "cuota justa × VALUE_MARGIN: por debajo, no se entra"},
+          "live_odds_ref": {"type": ["number", "null"]},
+          "value": {"type": ["boolean", "null"]},
+          "edge": {"type": ["number", "null"]}
+        }
+      }
+    },
+    "primary_market": {"type": ["object", "null"]},
+    "reasons": {"type": "array", "items": {"type": "string"}},
+    "red_flags": {"type": "array", "items": {"type": "string"}},
+    "model": {"type": "object"}
+  }
+}
