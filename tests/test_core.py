@@ -179,3 +179,26 @@ def test_real_bets_flow(monkeypatch, tmp_path):
     s = bets.month_summary()
     assert s["closed"] == 1 and s["profit"] == round(0.85, 2) or s["profit"] == -1
     assert "Objetivo del mes" in bets.progress_text(s)
+
+
+def test_espn_parsing(monkeypatch):
+    from futbot import espn
+    ev = {"id": "401", "date": "2026-10-31T15:00Z", "competitions": [{
+        "status": {"displayClock": "21'", "period": 1, "type": {"state": "in", "name": "STATUS_FIRST_HALF"}},
+        "competitors": [{"homeAway": "home", "score": "0", "team": {"id": "83", "displayName": "Barcelona"}},
+                        {"homeAway": "away", "score": "1", "team": {"id": "99", "displayName": "Racing"}}],
+        "details": [{"type": {"text": "Goal"}, "scoringPlay": True, "clock": {"displayValue": "12'"}, "team": {"id": "99"}},
+                    {"type": {"text": "Red Card"}, "redCard": True, "clock": {"displayValue": "19'"},
+                     "team": {"id": "99"}, "athletesInvolved": [{"displayName": "Defensa"}]}],
+        "odds": [{"provider": {"name": "ESPN BET"}, "homeTeamOdds": {"moneyLine": -400},
+                  "awayTeamOdds": {"moneyLine": 900}, "drawOdds": {"moneyLine": 450}}]}]}
+    monkeypatch.setattr(espn, "get_json", lambda url, **k: {"events": [ev]} if "esp.1" in url else {"events": []})
+    live = espn.live_events()
+    assert len(live) == 1
+    m = live[0]
+    assert m["minute"] == 21 and m["status_code"] == espn.FIRST_HALF and m["away_reds"] == 1
+    r = espn.red_cards(401)[0]
+    assert r["minute"] == 19 and r["is_home"] is False and r["player"] == "Defensa"
+    assert espn.goals(401) == [{"minute": 12, "is_home": False}]
+    o = espn.odds(401)["1x2"]
+    assert o["1"]["initial"] == 1.25 and o["2"]["initial"] == 10.0

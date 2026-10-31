@@ -6,7 +6,7 @@ import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
-from . import apifootball, config, mensajero, sofascore, storage
+from . import apifootball, config, espn, mensajero, sofascore, storage
 
 log = logging.getLogger(__name__)
 FINISHED = {100, 110, 120}  # terminado / tras prórroga / tras penaltis
@@ -16,7 +16,8 @@ def _final_score(alert):
     p = alert["payload"]
     if p.get("match_id"):
         try:
-            ev = sofascore.event_detail(p["match_id"])
+            src = espn if p.get("source") == "espn" else sofascore
+            ev = src.event_detail(p["match_id"])
             if ev and ev["status_code"] in FINISHED:
                 return ev["home_score"], ev["away_score"]
             return None

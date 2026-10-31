@@ -4,12 +4,13 @@
   python -m futbot diagnose     # comprueba SofaScore, API-Football, Telegram y el LLM
   python -m futbot audit        # informe del Auditor (lo lanza GitHub Actions los lunes)
 """
+import html
 import json
 import logging
 import sys
 import time
 
-from . import apifootball, auditor, config, estratega_llm, mensajero, scout, sofascore
+from . import apifootball, auditor, config, espn, estratega_llm, mensajero, scout, sofascore
 from .http import BACKEND
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s", datefmt="%H:%M:%S")
@@ -34,9 +35,9 @@ def diagnose():
         t = time.time()
         try:
             msg = fn()
-            out.append(f"✅ {name}: {msg} ({time.time() - t:.1f}s)")
+            out.append(f"✅ {html.escape(name)}: {html.escape(str(msg))[:250]} ({time.time() - t:.1f}s)")
         except Exception as e:
-            out.append(f"❌ {name}: {str(e)[:150]}")
+            out.append(f"❌ {html.escape(name)}: {html.escape(str(e)[:250])}")
 
     check("SofaScore programados hoy", lambda: f"{len(sofascore.scheduled_today())} partidos de las 7 competiciones")
     live_all = []
@@ -46,6 +47,14 @@ def diagnose():
         check(f"Stats {ev['home']}-{ev['away']}", lambda: json.dumps(sofascore.statistics(ev["match_id"])["home"]))
         check("Odds SofaScore", lambda: json.dumps(sofascore.odds(ev["match_id"])["1x2"]))
         check("Incidencias", lambda: f"{len(sofascore.red_cards(ev['match_id']))} rojas")
+    espn_live = []
+    check("ESPN programados hoy", lambda: f"{len(espn.scheduled_today())} partidos de las 7 competiciones")
+    check("ESPN en vivo", lambda: f"{len(espn_live.extend(espn.live_events()) or espn_live)} partidos objetivo en juego")
+    sample = espn_live[0] if espn_live else next(iter(espn._EVENTS), None)
+    if sample:
+        mid = sample["match_id"] if isinstance(sample, dict) else sample
+        check(f"ESPN stats partido {mid}", lambda: json.dumps(espn.statistics(mid)["home"]))
+        check("ESPN cuotas", lambda: json.dumps(espn.odds(mid)["1x2"]))
     if apifootball.enabled():
         check("API-Football", lambda: f"{len(apifootball.fixtures_for_date())} partidos hoy · quedan {apifootball.remaining()} peticiones de presupuesto")
     else:
@@ -56,7 +65,7 @@ def diagnose():
             from . import estratega_reglas
             v = estratega_llm.review(p, estratega_reglas.evaluate(p))
             if not v:
-                raise RuntimeError("sin respuesta válida (mira el log)")
+                raise RuntimeError(estratega_llm.LAST_ERROR or "sin respuesta válida")
             return f"{config.LLM_PROVIDER} → {v['rating']}"
         check("LLM", llm_ping)
     else:

@@ -6,7 +6,9 @@ Tipos de disparo:
 En ambos, `target_team` es el equipo al que se analizaría respaldar."""
 import logging
 
-from . import apifootball, sofascore
+from . import apifootball, espn, sofascore
+
+PROVIDERS = {"sofascore": sofascore, "espn": espn}
 from .storage import now_iso
 
 log = logging.getLogger(__name__)
@@ -39,8 +41,9 @@ def build_payload(match, trigger, source="sofascore", af_fixture_id=None):
 
     # --- estadísticas en el momento de detectar
     stats = None
-    if source == "sofascore":
-        stats = _safe(sofascore.statistics, match["match_id"])
+    src = PROVIDERS.get(source)
+    if src:
+        stats = _safe(src.statistics, match["match_id"])
     if (not stats or stats["home"].get("shots_total") is None) and apifootball.enabled():
         af_fixture_id = af_fixture_id or (_safe(apifootball.find_fixture, match["home"], match["away"]) or {}).get("fixture_id")
         if af_fixture_id:
@@ -55,15 +58,15 @@ def build_payload(match, trigger, source="sofascore", af_fixture_id=None):
             af = _safe(apifootball.prematch_odds, af_fixture_id)
             if af and af["1x2"]:
                 odds_pre = {"source": f"API-Football · {af['bookmaker']}", **{k: af[k] for k in ("1x2", "dc", "ou")}}
-    if source == "sofascore":
-        ss = _safe(sofascore.odds, match["match_id"])
+    if src:
+        ss = _safe(src.odds, match["match_id"])
         if ss and ss["1x2"]:
             pick = lambda d, f: {k: v[f] for k, v in d.items() if v.get(f)}
             if not odds_pre:
-                odds_pre = {"source": "SofaScore (apertura)", "1x2": pick(ss["1x2"], "initial"),
+                odds_pre = {"source": f"{source} (pre-partido{' · ' + ss['provider'] if ss.get('provider') else ''})", "1x2": pick(ss["1x2"], "initial"),
                             "dc": pick(ss["dc"], "initial"),
                             "ou": {l: pick(v, "initial") for l, v in ss["ou"].items()}}
-            odds_live = {"source": "SofaScore (actual)", "1x2": pick(ss["1x2"], "current"),
+            odds_live = None if source == "espn" else {"source": "SofaScore (actual)", "1x2": pick(ss["1x2"], "current"),
                          "dc": pick(ss["dc"], "current"),
                          "ou": {l: pick(v, "current") for l, v in ss["ou"].items()}}
 

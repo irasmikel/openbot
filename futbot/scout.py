@@ -5,8 +5,10 @@ import logging
 import time
 import uuid
 
-from . import (apifootball, auditor, bets, config, enricher, estratega_llm, estratega_reglas, mensajero, model,
-               sofascore, storage)
+from . import (apifootball, auditor, bets, config, enricher, espn, estratega_llm, estratega_reglas, mensajero,
+               model, sofascore, storage)
+
+PROVIDERS = {"sofascore": sofascore, "espn": espn}
 from .http import HttpError
 
 log = logging.getLogger(__name__)
@@ -81,10 +83,10 @@ def _handle_new_reds(match, reds, source, af_fixture_id=None):
 _PRE_PROBS = {}  # match_id -> {"1","X","2"} probabilidades pre-partido (1 petición por partido)
 
 
-def _prematch_probs(match_id):
+def _prematch_probs(match_id, src=sofascore):
     if match_id not in _PRE_PROBS:
         try:
-            o = sofascore.odds(match_id)
+            o = src.odds(match_id)
             _PRE_PROBS[match_id] = model.demargin({k: v["initial"] for k, v in o["1x2"].items()}) \
                 if len(o["1x2"]) == 3 else None
         except Exception as e:
@@ -93,7 +95,7 @@ def _prematch_probs(match_id):
     return _PRE_PROBS[match_id]
 
 
-def _check_favorite_losing(ev, reds=None):
+def _check_favorite_losing(ev, src=sofascore, source="sofascore"):
     if not config.FAV_ENABLED or not ev.get("minute") or ev["minute"] > config.FAV_MAX_MINUTE + 3:
         return
     if ev["home_score"] == ev["away_score"]:
@@ -101,7 +103,7 @@ def _check_favorite_losing(ev, reds=None):
     key = f"fav:{ev['match_id']}"
     if storage.already_alerted(key):
         return
-    probs = _prematch_probs(ev["match_id"])
+    probs = _prematch_probs(ev["match_id"], src)
     if not probs:
         return
     fav_home = probs["1"] >= probs["2"]
@@ -111,7 +113,7 @@ def _check_favorite_losing(ev, reds=None):
         return
     goal_minute = None
     try:
-        goals = [g for g in sofascore.goals(ev["match_id"]) if g["is_home"] != fav_home]
+        goals = [g for g in src.goals(ev["match_id"]) if g["is_home"] != fav_home]
         goal_minute = goals[0]["minute"] if goals else None
     except Exception as e:
         log.warning("goles %s: %s", ev["match_id"], e)
@@ -121,7 +123,7 @@ def _check_favorite_losing(ev, reds=None):
     trig = {"type": "favorito_pierde", "fav_is_home": fav_home, "p_fav_pre": round(p_fav, 3),
             "goal_minute": goal_minute}
     try:
-        process_trigger(ev, trig, "sofascore")
+        process_trigger(ev, trig, source)
     except Exception:
         log.exception("Error procesando favorito pierde en %s vs %s", ev["home"], ev["away"])
 
@@ -146,16 +148,16 @@ def _plan_summary(schedule):
                      for m in rows if m.get("start_ts"))
 
 
-# ------------------------------------------------------------------ modo SofaScore
-def _watch_sofascore(deadline):
-    schedule = sofascore.scheduled_today()
+# ------------------------------------------------------------------ bucle principal
+def _watch(src, source, deadline):
+    schedule = src.scheduled_today()
     schedule_ts = time.time()
-    log.info("Partidos hoy en las 7 competiciones: %d\n%s", len(schedule), _plan_summary(schedule))
+    log.info("[%s] Partidos hoy en las 7 competiciones: %d\n%s", source, len(schedule), _plan_summary(schedule))
     last_sweep = 0.0
     while time.time() < deadline:
         now = time.time()
         if now - schedule_ts > 3600:  # refresca aplazamientos/cambios
-            schedule, schedule_ts = sofascore.scheduled_today() or schedule, now
+            schedule, schedule_ts = src.scheduled_today() or schedule, now
         active_ids = {m["match_id"] for m in schedule if m.get("start_ts") and _in_window(m["start_ts"], now)}
         if not active_ids:
             wait = _next_window_in(schedule, now)
@@ -164,25 +166,30 @@ def _watch_sofascore(deadline):
                 return
             log.info("Próxima ventana en %.0f min; esperando…", wait / 60)
             time.sleep(min(wait, 300))
+            bets.sync()
             continue
 
-        live = [e for e in sofascore.live_events() if e["match_id"] in active_ids]
+        live = [e for e in src.live_events() if e["match_id"] in active_ids]
         sweep_due = now - last_sweep >= config.INCIDENT_SWEEP_SECONDS
         for ev in live:
-            if ev["status_code"] != sofascore.FIRST_HALF and not (ev["minute"] and ev["minute"] <= 45):
+            if ev["status_code"] != src.FIRST_HALF and not (ev["minute"] and ev["minute"] <= 45):
                 continue
             has_red_flag = bool(ev.get("home_reds") or ev.get("away_reds"))
             # pocos partidos -> incidencias en cada vuelta; muchos -> solo si hay señal o toca barrido
             if has_red_flag or sweep_due or len(live) <= 4:
-                reds = sofascore.red_cards(ev["match_id"])
+                reds = src.red_cards(ev["match_id"])
                 if reds:
-                    _handle_new_reds(ev, reds, "sofascore")
-            _check_favorite_losing(ev)
+                    _handle_new_reds(ev, reds, source)
+            _check_favorite_losing(ev, src, source)
         if sweep_due:
             last_sweep = now
             bets.sync()
         time.sleep(config.POLL_SECONDS)
     log.info("Tiempo máximo de ejecución alcanzado.")
+
+
+def _watch_sofascore(deadline):
+    return _watch(sofascore, "sofascore", deadline)
 
 
 # ------------------------------------------------------------------ modo respaldo API-Football
@@ -221,17 +228,20 @@ def housekeeping():
 
 
 def watch():
+    """Fuente: DATA_SOURCE=auto (SofaScore y, si bloquea, ESPN) | sofascore | espn | apifootball"""
     deadline = time.time() + config.MAX_RUNTIME_MIN * 60
     housekeeping()
-    try:
-        _watch_sofascore(deadline)
-    except HttpError as e:
-        if e.status in (401, 403, 429):
-            log.error("SofaScore bloquea esta IP (%s). Paso a respaldo.", e.status)
-            try:
-                mensajero.send_text(f"⚠️ SofaScore devolvió {e.status}. Scout en modo respaldo (API-Football, más lento).")
-            except Exception:
-                log.exception("No se pudo avisar por Telegram")
-            _watch_apifootball(deadline)
-        else:
-            raise
+    mode = config.DATA_SOURCE
+    if mode in ("auto", "sofascore"):
+        try:
+            return _watch_sofascore(deadline)
+        except HttpError as e:
+            if e.status not in (401, 403, 429) or mode == "sofascore":
+                raise
+            log.warning("SofaScore bloquea esta IP (%s). Uso ESPN.", e.status)
+    if mode in ("auto", "espn"):
+        try:
+            return _watch(espn, "espn", deadline)
+        except HttpError as e:
+            log.error("ESPN falló (%s). Paso a API-Football.", e.status)
+    _watch_apifootball(deadline)

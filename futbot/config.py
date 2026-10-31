@@ -42,6 +42,7 @@ COMPETITIONS = {
 COMP_FLAGS = {8: "🇪🇸", 17: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", 23: "🇮🇹", 35: "🇩🇪", 34: "🇫🇷", 7: "⭐", 679: "🟠"}
 
 # ---------------------------------------------------------------- Scout
+DATA_SOURCE = os.getenv("DATA_SOURCE", "auto").lower()  # auto | sofascore | espn | apifootball
 MAX_RED_MINUTE = int(os.getenv("MAX_RED_MINUTE", "30"))
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "30"))
 INCIDENT_SWEEP_SECONDS = 180          # barrido de seguridad de incidencias

@@ -10,6 +10,7 @@ from .http import post_json
 
 log = logging.getLogger(__name__)
 ORDER = {"Descartar": 0, "Media": 1, "Alta": 2}
+LAST_ERROR = None
 
 
 def enabled():
@@ -39,14 +40,23 @@ def _extract_json(text):
 
 
 def _call_gemini(system, user):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEMINI_MODEL}:generateContent"
+    """Claves 'AIza…' = Google AI Studio. Claves 'AQ.…' = Vertex AI (modo express)."""
+    key = config.GEMINI_API_KEY.strip()
+    if key.startswith("AQ."):
+        url = (f"https://aiplatform.googleapis.com/v1/publishers/google/models/"
+               f"{config.GEMINI_MODEL}:generateContent")
+        label = "Gemini (Vertex)"
+    else:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEMINI_MODEL}:generateContent"
+        label = "Gemini (AI Studio)"
     body = {
-        "system_instruction": {"parts": [{"text": system}]},
+        "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
         "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
     }
-    data = post_json(url, body, headers={"x-goog-api-key": config.GEMINI_API_KEY}, timeout=30, label="Gemini")
-    return data["candidates"][0]["content"]["parts"][0]["text"]
+    data = post_json(url, body, headers={"x-goog-api-key": key}, timeout=45, label=label)
+    parts = data["candidates"][0]["content"]["parts"]
+    return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
 
 def _call_openai_compat(system, user):
@@ -71,6 +81,8 @@ def review(payload, rules):
         v["by"] = f"llm:{config.LLM_PROVIDER}"
         return v
     except Exception as e:
+        global LAST_ERROR
+        LAST_ERROR = str(e)[:300]
         log.warning("Estratega LLM falló: %s", e)
         return None
 
