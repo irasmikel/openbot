@@ -162,8 +162,11 @@ def _watch(src, source, deadline):
         if not active_ids:
             wait = _next_window_in(schedule, now)
             if wait is None or wait > config.LOOKAHEAD_MIN * 60:
-                log.info("Nada en los próximos %d min. Fin.", config.LOOKAHEAD_MIN)
-                return
+                log.info("No quedan partidos hoy en las 7 competiciones. Fin.")
+                return False
+            if now + wait > deadline:
+                log.info("La próxima ventana empieza después del límite de esta ejecución: relevo.")
+                return True
             log.info("Próxima ventana en %.0f min; esperando…", wait / 60)
             time.sleep(min(wait, 300))
             bets.sync()
@@ -185,7 +188,8 @@ def _watch(src, source, deadline):
             last_sweep = now
             bets.sync()
         time.sleep(config.POLL_SECONDS)
-    log.info("Tiempo máximo de ejecución alcanzado.")
+    log.info("Tiempo máximo de ejecución alcanzado: relevo.")
+    return True
 
 
 def _watch_sofascore(deadline):
@@ -227,21 +231,36 @@ def housekeeping():
             log.exception("housekeeping %s", fn.__name__)
 
 
+def _relaunch():
+    """Lanza una nueva ejecución de este workflow (GitHub permite workflow_dispatch con GITHUB_TOKEN)."""
+    import os
+    from .http import post_json
+    repo, token = os.getenv("GITHUB_REPOSITORY"), os.getenv("GITHUB_TOKEN")
+    if not (repo and token):
+        log.info("Sin GITHUB_TOKEN: no puedo relanzarme (¿ejecución local?)")
+        return
+    url = f"https://api.github.com/repos/{repo}/actions/workflows/scout.yml/dispatches"
+    post_json(url, {"ref": "main", "inputs": {"mode": "watch"}},
+              headers={"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"},
+              label="relanzar workflow")
+    log.info("Relevo lanzado.")
+
+
 def watch():
-    """Fuente: DATA_SOURCE=auto (SofaScore y, si bloquea, ESPN) | sofascore | espn | apifootball"""
+    """Vigila todo el día. Si llega al límite de ~5h40 y quedan partidos, se relanza a sí mismo."""
     deadline = time.time() + config.MAX_RUNTIME_MIN * 60
     housekeeping()
-    mode = config.DATA_SOURCE
-    if mode in ("auto", "sofascore"):
+    if config.DATA_SOURCE == "apifootball":
+        _watch_apifootball(deadline)
+        return
+    try:
+        cont = _watch(espn, "espn", deadline)
+    except HttpError as e:
+        log.error("ESPN falló (%s). Paso a API-Football.", e.status)
+        _watch_apifootball(deadline)
+        cont = False
+    if cont:
         try:
-            return _watch_sofascore(deadline)
-        except HttpError as e:
-            if e.status not in (401, 403, 429) or mode == "sofascore":
-                raise
-            log.warning("SofaScore bloquea esta IP (%s). Uso ESPN.", e.status)
-    if mode in ("auto", "espn"):
-        try:
-            return _watch(espn, "espn", deadline)
-        except HttpError as e:
-            log.error("ESPN falló (%s). Paso a API-Football.", e.status)
-    _watch_apifootball(deadline)
+            _relaunch()
+        except Exception:
+            log.exception("No se pudo relanzar")

@@ -1,26 +1,18 @@
-"""Cliente HTTP. Usa curl_cffi (huella de navegador real) si está disponible: SofaScore bloquea
-clientes que no parecen un navegador. Si no, cae a requests."""
+"""Cliente HTTP sencillo (requests). Sin suplantar navegadores."""
 import logging
 import time
 
 log = logging.getLogger(__name__)
 
-try:
-    from curl_cffi import requests as _cffi
-    _SESSION = _cffi.Session(impersonate="chrome")
-    BACKEND = "curl_cffi"
-except Exception:  # pragma: no cover
-    import requests as _req
-    _SESSION = _req.Session()
-    BACKEND = "requests"
+import requests as _req
 
+_SESSION = _req.Session()
+BACKEND = "requests"
+
+# Cliente identificado honestamente: solo usamos fuentes que permiten acceso automático.
 BROWSER_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/129.0 Safari/537.36",
-    "Accept": "application/json, text/plain, */*",
-    "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
-    "Origin": "https://www.sofascore.com",
-    "Referer": "https://www.sofascore.com/",
+    "User-Agent": "futbot/1.0 (+https://github.com/irasmikel/openbot)",
+    "Accept": "application/json",
 }
 
 

@@ -2,9 +2,10 @@ name: Scout (rojas tempranas)
 
 on:
   schedule:
-    # cada 20 min entre 09:00 y 21:59 UTC (10:00-22:59 hora española en invierno).
-    # Si no hay partidos de las 7 competiciones en los próximos 40', la ejecución acaba en segundos.
-    - cron: "7,27,47 9-21 * * *"
+    # Una ejecución vigila TODO el día y se relanza sola cada ~5h40 si quedan partidos.
+    # Varias horas de arranque por si GitHub se salta alguna (si ya hay una en marcha, esperan en cola).
+    - cron: "7 9 * * *"
+    - cron: "37 11,13,15,17,19 * * *"
   workflow_dispatch:
     inputs:
       mode:
@@ -19,6 +20,7 @@ concurrency:
 
 permissions:
   contents: write
+  actions: write
 
 jobs:
   run:
@@ -33,6 +35,8 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Ejecutar
         env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FOOTBALL_DATA_TOKEN: ${{ secrets.FOOTBALL_DATA_TOKEN }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           APIFOOTBALL_KEY: ${{ secrets.APIFOOTBALL_KEY }}

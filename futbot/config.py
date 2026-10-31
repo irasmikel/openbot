@@ -17,6 +17,7 @@ DATA_DIR.mkdir(exist_ok=True)
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 APIFOOTBALL_KEY = os.getenv("APIFOOTBALL_KEY", "")
+FOOTBALL_DATA_TOKEN = os.getenv("FOOTBALL_DATA_TOKEN", "")
 
 # Panel de analistas IA (todos gratis). "auto"/"panel" = usa todos los que tengan clave (hasta LLM_PANEL_SIZE).
 # Un valor concreto ("gemini", "groq", "cerebras", "openrouter", "glm") usa solo ese.
@@ -51,13 +52,13 @@ COMPETITIONS = {
 COMP_FLAGS = {8: "🇪🇸", 17: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", 23: "🇮🇹", 35: "🇩🇪", 34: "🇫🇷", 7: "⭐", 679: "🟠"}
 
 # ---------------------------------------------------------------- Scout
-DATA_SOURCE = os.getenv("DATA_SOURCE", "auto").lower()  # auto | sofascore | espn | apifootball
+DATA_SOURCE = os.getenv("DATA_SOURCE", "espn").lower()  # espn | apifootball
 MAX_RED_MINUTE = int(os.getenv("MAX_RED_MINUTE", "30"))
 POLL_SECONDS = int(os.getenv("POLL_SECONDS", "30"))
 INCIDENT_SWEEP_SECONDS = 180          # barrido de seguridad de incidencias
 WINDOW_BEFORE_KICKOFF_MIN = 3         # empieza a vigilar 3' antes del inicio
 WINDOW_AFTER_KICKOFF_MIN = 45         # 30' de juego + retrasos/descuento
-LOOKAHEAD_MIN = int(os.getenv("LOOKAHEAD_MIN", "40"))  # si nada empieza en 40', la ejecución termina
+LOOKAHEAD_MIN = int(os.getenv("LOOKAHEAD_MIN", "900"))  # espera todo el día; si no queda nada hoy, termina
 MAX_RUNTIME_MIN = int(os.getenv("MAX_RUNTIME_MIN", "340"))  # < 6h límite de GitHub Actions
 
 # ---------------------------------------------------------------- modelo
