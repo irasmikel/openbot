@@ -30,7 +30,7 @@ OPENAI_LIKE = {
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY", "OPENROUTER_MODELS", "OpenRouter"),
     "glm": (None, "OPENAI_COMPAT_API_KEY", "OPENAI_COMPAT_MODEL", "GLM"),
 }
-PREFERENCE = ["gemini", "groq", "glm", "cerebras", "openrouter"]
+PREFERENCE = ["groq", "glm", "gemini", "cerebras", "openrouter"]  # rápidos primero; Gemini a veces va lento
 
 ROLES = [
     ("🧮", "Matemático",
@@ -128,7 +128,7 @@ def _call_gemini(system, user):
         for attempt in range(2):
             try:
                 data = post_json(url.format(model), body, headers={"x-goog-api-key": key},
-                                 timeout=40, label=f"Gemini {model}")
+                                 timeout=25, label=f"Gemini {model}")
                 parts = data["candidates"][0]["content"]["parts"]
                 _GEMINI_MODEL_OK = model
                 return "".join(p.get("text", "") for p in parts if not p.get("thought")), model
