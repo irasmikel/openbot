@@ -35,7 +35,7 @@ def diagnose():
         t = time.time()
         try:
             msg = fn()
-            out.append(f"✅ {html.escape(name)}: {html.escape(str(msg))[:250]} ({time.time() - t:.1f}s)")
+            out.append(f"✅ {html.escape(name)}: {html.escape(str(msg))[:700]} ({time.time() - t:.1f}s)")
         except Exception as e:
             out.append(f"❌ {html.escape(name)}: {html.escape(str(e)[:250])}")
 
@@ -72,7 +72,10 @@ def diagnose():
             v = estratega_llm.review(p, estratega_reglas.evaluate(p))
             if not v:
                 raise RuntimeError(estratega_llm.LAST_ERROR or "sin respuesta")
-            return " · ".join(f"{m['role']}={m['rating']}" for m in v["panel"]) + f" → {v['rating']}"
+            res = " · ".join(f"{m['role']}({m['provider']})={m['rating']}" for m in v["panel"]) + f" → {v['rating']}"
+            if v.get("failed"):
+                res += " | fallos: " + " / ".join(v["failed"])
+            return res
         check("Panel IA (alerta de prueba)", panel)
     text = "\n".join(out)
     print(text)

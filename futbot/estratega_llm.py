@@ -194,13 +194,20 @@ def _call_openai_like(prov, system, user):
     for model in models:
         for attempt in range(2):
             try:
-                body = {"model": model, "temperature": 0.2, "max_tokens": 900,
+                body = {"model": model, "temperature": 0.2, "max_tokens": 2500,
                         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+                if prov == "glm":
+                    body["thinking"] = {"type": "disabled"}  # si no, gasta los tokens pensando
+                if prov in ("groq", "cerebras", "openrouter") and "gpt-oss" in model:
+                    body["reasoning_effort"] = "low"
                 data = post_json(base.rstrip("/") + "/chat/completions", body, headers=headers,
                                  timeout=45, label=f"{label} {model}")
                 if not data.get("choices"):
                     raise RuntimeError(str(data)[:150])
-                return data["choices"][0]["message"]["content"], model
+                content = data["choices"][0]["message"].get("content") or ""
+                if not content.strip():
+                    raise RuntimeError(f"respuesta vacía (finish={data['choices'][0].get('finish_reason')})")
+                return content, model
             except Exception as e:
                 msg = str(e)
                 if attempt == 0 and _busy(msg):
@@ -214,10 +221,23 @@ def _call_openai_like(prov, system, user):
 def ask(prov, system, user):
     """Pregunta a un proveedor. Devuelve (veredicto_dict, modelo)."""
     raw, model = _call_gemini(system, user) if prov == "gemini" else _call_openai_like(prov, system, user)
+    if not (raw or "").strip():
+        raise ValueError("respuesta vacía (¿se quedó sin tokens pensando?)")
     v = _extract_json(raw)
-    if v.get("rating") not in ORDER:
-        raise ValueError(f"rating inválido: {v.get('rating')}")
+    v["rating"] = _norm_rating(v.get("rating"))
     return v, model
+
+
+def _norm_rating(r):
+    t = str(r or "").strip().lower()
+    t = t.replace("á", "a").replace("é", "e")
+    if t.startswith("alt") or t == "high":
+        return "Alta"
+    if t.startswith("med") or t == "medium":
+        return "Media"
+    if t.startswith("desc") or t in ("discard", "low", "baja", "no"):
+        return "Descartar"
+    raise ValueError(f"rating inválido: {r!r}")
 
 
 # ------------------------------------------------------------------ panel
