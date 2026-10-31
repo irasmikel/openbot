@@ -30,7 +30,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-flash-latest")
 OPENAI_COMPAT_BASE_URL = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.z.ai/api/paas/v4")
 OPENAI_COMPAT_API_KEY = os.getenv("OPENAI_COMPAT_API_KEY", "")
-OPENAI_COMPAT_MODEL = os.getenv("OPENAI_COMPAT_MODEL", "glm-4.5-flash")
+OPENAI_COMPAT_MODEL = os.getenv("OPENAI_COMPAT_MODEL", "glm-4.5-flash,glm-4.7-flash")
 
 DRY_RUN = os.getenv("DRY_RUN", "0") == "1"  # no envía a Telegram, imprime por consola
 

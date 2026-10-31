@@ -60,51 +60,72 @@ def _extract_json(text):
 _GEMINI_MODEL_OK = None
 
 
-def _gemini_pick_model(key):
-    """Pregunta a Google qué modelos tiene esta clave y elige el Flash estable más reciente."""
+def _gemini_models(key):
+    """Modelos Flash disponibles para esta clave, ordenados de mejor a peor."""
     from .http import get_json
     data = get_json("https://generativelanguage.googleapis.com/v1beta/models",
                     headers={"x-goog-api-key": key}, params={"pageSize": 200}, timeout=15) or {}
     names = [m["name"].split("/")[-1] for m in data.get("models", [])
              if "generateContent" in (m.get("supportedGenerationMethods") or [])]
-    if "gemini-flash-latest" in names:
-        return "gemini-flash-latest"
 
     def score(n):
         v = re.search(r"gemini-(\d+(?:\.\d+)?)-flash", n)
         ver = float(v.group(1)) if v else 0
         stable = not re.search(r"preview|exp|tts|image|audio|live|thinking", n)
-        lite = "lite" in n
-        return (stable, ver, not lite)
-    flash = sorted((n for n in names if "flash" in n), key=score, reverse=True)
-    if flash:
-        return flash[0]
-    raise RuntimeError(f"ningún modelo Flash disponible ({len(names)} modelos)")
+        return (stable, n == "gemini-flash-latest", ver, "lite" not in n)
+    return sorted((n for n in names if "flash" in n and not re.search(r"tts|image|audio|live", n)),
+                  key=score, reverse=True)
+
+
+def _gemini_pick_model(key):
+    models = _gemini_models(key)
+    if not models:
+        raise RuntimeError("ningún modelo Flash disponible")
+    return models[0]
 
 
 def _call_gemini(system, user):
     """Clave de Google AI Studio (gratis; puede empezar por 'AIza' o por 'AQ.').
-    Si el modelo configurado ya no existe, elige automáticamente el Flash más reciente."""
+    - Si el modelo no existe (404) elige el Flash más reciente disponible.
+    - Si está saturado (503/429/500) reintenta y prueba otros modelos Flash."""
     global _GEMINI_MODEL_OK
+    import time
     key = config.GEMINI_API_KEY.strip()
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
         "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
     }
-    model = _GEMINI_MODEL_OK or config.GEMINI_MODEL
     url = "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent"
-    try:
-        data = post_json(url.format(model), body, headers={"x-goog-api-key": key}, timeout=45, label=f"Gemini {model}")
-    except RuntimeError as e:
-        if "HTTP 404" not in str(e) and "HTTP 400" not in str(e):
-            raise
-        model = _gemini_pick_model(key)
-        log.info("Gemini: modelo configurado no disponible, uso %s", model)
-        data = post_json(url.format(model), body, headers={"x-goog-api-key": key}, timeout=45, label=f"Gemini {model}")
-    _GEMINI_MODEL_OK = model
-    parts = data["candidates"][0]["content"]["parts"]
-    return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    queue = [_GEMINI_MODEL_OK or config.GEMINI_MODEL]
+    tried, errors, listed = set(), [], False
+    while queue and len(tried) < 5:
+        model = queue.pop(0)
+        if model in tried:
+            continue
+        tried.add(model)
+        for attempt in range(2):
+            try:
+                data = post_json(url.format(model), body, headers={"x-goog-api-key": key},
+                                 timeout=45, label=f"Gemini {model}")
+                parts = data["candidates"][0]["content"]["parts"]
+                _GEMINI_MODEL_OK = model
+                return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+            except Exception as e:
+                msg = str(e)
+                busy = any(c in msg for c in ("HTTP 503", "HTTP 429", "HTTP 500"))
+                if busy and attempt == 0:
+                    time.sleep(3)
+                    continue
+                errors.append(msg[:140])
+                if (busy or "HTTP 404" in msg or "HTTP 400" in msg) and not listed:
+                    listed = True
+                    try:
+                        queue += [m for m in _gemini_models(key) if m not in tried]
+                    except Exception as le:
+                        errors.append(f"listado: {str(le)[:80]}")
+                break
+    raise RuntimeError(" | ".join(errors[-2:]))
 
 
 def _call_github(system, user):
@@ -136,14 +157,29 @@ def _call_anthropic(system, user):
 
 
 def _call_openai_compat(system, user):
+    """GLM de Z.ai (gratis: glm-4.5-flash / glm-4.7-flash) u otra API compatible con OpenAI.
+    OPENAI_COMPAT_MODEL admite varios modelos separados por comas: se prueban en orden."""
+    import time
     url = config.OPENAI_COMPAT_BASE_URL.rstrip("/") + "/chat/completions"
-    body = {"model": config.OPENAI_COMPAT_MODEL, "temperature": 0.2,
-            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
-    headers = {"Authorization": f"Bearer {config.OPENAI_COMPAT_API_KEY}"}
-    data = post_json(url, body, headers=headers, timeout=45, label="GLM/compatible")
-    if not data.get("choices"):
-        raise RuntimeError(str(data)[:200])
-    return data["choices"][0]["message"]["content"]
+    headers = {"Authorization": f"Bearer {config.OPENAI_COMPAT_API_KEY.strip()}"}
+    errors = []
+    for model in [m.strip() for m in config.OPENAI_COMPAT_MODEL.split(",") if m.strip()]:
+        for attempt in range(2):
+            try:
+                body = {"model": model, "temperature": 0.2,
+                        "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+                data = post_json(url, body, headers=headers, timeout=60, label=f"GLM {model}")
+                if not data.get("choices"):
+                    raise RuntimeError(str(data)[:150])
+                return data["choices"][0]["message"]["content"]
+            except Exception as e:
+                msg = str(e)
+                if attempt == 0 and any(c in msg for c in ("HTTP 429", "HTTP 503", "HTTP 500")):
+                    time.sleep(3)
+                    continue
+                errors.append(msg[:140])
+                break
+    raise RuntimeError(" | ".join(errors[-2:]))
 
 
 def review(payload, rules):
