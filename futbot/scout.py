@@ -174,6 +174,10 @@ def _watch(src, source, deadline):
 
         live = [e for e in src.live_events() if e["match_id"] in active_ids]
         sweep_due = now - last_sweep >= config.INCIDENT_SWEEP_SECONDS
+        if sweep_due:  # latido cada ~3 min para ver en el registro qué está vigilando
+            log.info("Vigilando %d partido(s): %s", len(live), "; ".join(
+                f"{e['home']} {e['home_score']}-{e['away_score']} {e['away']} ({e['minute']}', "
+                f"rojas {e.get('home_reds') or 0}-{e.get('away_reds') or 0})" for e in live) or "esperando el inicio")
         for ev in live:
             if ev["status_code"] != src.FIRST_HALF and not (ev["minute"] and ev["minute"] <= 45):
                 continue
