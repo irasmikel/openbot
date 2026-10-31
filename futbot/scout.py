@@ -149,6 +149,59 @@ def _plan_summary(schedule):
 
 
 # ------------------------------------------------------------------ bucle principal
+# ------------------------------------------------------------------ parte diario
+def daily_summary(src, source):
+    """Un mensaje al día (al acabar la vigilancia) para saber que el bot ha trabajado.
+    Además se autocomprueba: si hubo una roja antes del 30 sin alerta, lo marca."""
+    import json
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    today = datetime.now(ZoneInfo("Europe/Madrid")).strftime("%Y-%m-%d")
+    marker = config.DATA_DIR / "daily_summary_sent.json"
+    try:
+        if json.loads(marker.read_text()).get("date") == today:
+            return
+    except Exception:
+        pass
+    schedule = src.scheduled_today()
+    alerts = [a for a in storage.load_alerts() if a.get("created_at", "")[:10] == datetime.utcnow().strftime("%Y-%m-%d")]
+    early, late, missed = [], [], []
+    alerted_pairs = {(a["payload"].get("home"), a["payload"].get("away")) for a in alerts}
+    for m in schedule:
+        for r in src.red_cards(m["match_id"]) if hasattr(src, "red_cards") else []:
+            txt = f"{m['home']}–{m['away']} ({r['minute']}')"
+            if (r["minute"] or 99) <= config.MAX_RED_MINUTE:
+                early.append(txt)
+                if (m["home"], m["away"]) not in alerted_pairs:
+                    missed.append(txt)
+            else:
+                late.append(txt)
+    fav = sum(1 for a in alerts if a["payload"].get("trigger_type") == "favorito_pierde")
+    L = [f"📋 <b>Parte del día</b> · {today}"]
+    if not schedule:
+        L.append("Hoy no había partidos de las 7 competiciones. Bot en reposo ✅")
+    else:
+        L.append(f"👀 Partidos vigilados: <b>{len(schedule)}</b>")
+        L.append(f"🔔 Alertas enviadas: <b>{len(alerts)}</b>"
+                 + (f" (🟥 {len(alerts) - fav} rojas · 📉 {fav} favorito perdiendo)" if alerts else ""))
+        if early:
+            L.append("🟥 Rojas antes del 30': " + ", ".join(early))
+        if late:
+            L.append("🟨 Rojas después del 30' (no se avisan): " + ", ".join(late))
+        if not early and not late:
+            L.append("Sin expulsiones hoy.")
+        L.append("⚠️ <b>Rojas tempranas SIN alerta:</b> " + ", ".join(missed) + " — revisa el registro de Actions"
+                 if missed else "✅ Todo en orden")
+    try:
+        from . import bets
+        if alerts or bets.load():
+            L += ["", bets.progress_text()]
+    except Exception:
+        log.exception("progreso")
+    mensajero.send_text("\n".join(L))
+    marker.write_text(json.dumps({"date": today}))
+
+
 def _watch(src, source, deadline):
     schedule = src.scheduled_today()
     schedule_ts = time.time()
@@ -163,6 +216,10 @@ def _watch(src, source, deadline):
             wait = _next_window_in(schedule, now)
             if wait is None or wait > config.LOOKAHEAD_MIN * 60:
                 log.info("No quedan partidos hoy en las 7 competiciones. Fin.")
+                try:
+                    daily_summary(src, source)
+                except Exception:
+                    log.exception("parte diario")
                 return False
             if now + wait > deadline:
                 log.info("La próxima ventana empieza después del límite de esta ejecución: relevo.")

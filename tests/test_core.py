@@ -258,3 +258,24 @@ def test_llm_panel_substitute(monkeypatch):
     v = L.review(SAMPLE, estratega_reglas.evaluate(SAMPLE))
     assert len(v["panel"]) == 3 and "openrouter" in calls
     assert {m["role"] for m in v["panel"]} == {"Matemático", "Táctico", "Abogado del diablo"}
+
+
+def test_daily_summary_once(monkeypatch, tmp_path):
+    from futbot import mensajero
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(storage, "ALERTS", tmp_path / "alerts.jsonl")
+    sent = []
+    monkeypatch.setattr(mensajero, "send_text", lambda t: sent.append(t))
+
+    class Src:
+        @staticmethod
+        def scheduled_today():
+            return [{"match_id": 1, "home": "Spurs", "away": "Palace"}, {"match_id": 2, "home": "A", "away": "B"}]
+
+        @staticmethod
+        def red_cards(mid):
+            return [{"minute": 13, "is_home": False}] if mid == 1 else [{"minute": 70, "is_home": True}]
+    scout.daily_summary(Src, "espn")
+    scout.daily_summary(Src, "espn")
+    assert len(sent) == 1
+    assert "SIN alerta" in sent[0] and "Spurs" in sent[0] and "después del 30" in sent[0]
