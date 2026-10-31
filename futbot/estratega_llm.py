@@ -13,7 +13,21 @@ ORDER = {"Descartar": 0, "Media": 1, "Alta": 2}
 LAST_ERROR = None
 
 
+def _available():
+    """Proveedores con clave, en orden de preferencia."""
+    if config.LLM_PROVIDER != "auto":
+        return [config.LLM_PROVIDER]
+    out = []
+    if config.OPENAI_COMPAT_API_KEY:
+        out.append("openai_compat")
+    if config.GEMINI_API_KEY:
+        out.append("gemini")
+    return out
+
+
 def enabled():
+    if config.LLM_PROVIDER == "auto":
+        return bool(_available())
     if config.LLM_PROVIDER == "github":
         return bool(config.GITHUB_TOKEN)
     if config.LLM_PROVIDER == "anthropic":
@@ -44,23 +58,26 @@ def _extract_json(text):
 
 
 def _call_gemini(system, user):
-    """Claves 'AIza…' = Google AI Studio. Claves 'AQ.…' = Vertex AI (modo express)."""
+    """Clave de Google AI Studio (gratis). Las claves nuevas pueden empezar por 'AIza' o por 'AQ.'.
+    Se prueba primero AI Studio y, si no responde, Vertex AI."""
     key = config.GEMINI_API_KEY.strip()
-    if key.startswith("AQ."):
-        url = (f"https://aiplatform.googleapis.com/v1/publishers/google/models/"
-               f"{config.GEMINI_MODEL}:generateContent")
-        label = "Gemini (Vertex)"
-    else:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEMINI_MODEL}:generateContent"
-        label = "Gemini (AI Studio)"
     body = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": [{"text": user}]}],
         "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"},
     }
-    data = post_json(url, body, headers={"x-goog-api-key": key}, timeout=45, label=label)
-    parts = data["candidates"][0]["content"]["parts"]
-    return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+    errors = []
+    for label, url in (
+        ("AI Studio", f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEMINI_MODEL}:generateContent"),
+        ("Vertex", f"https://aiplatform.googleapis.com/v1/publishers/google/models/{config.GEMINI_MODEL}:generateContent"),
+    ):
+        try:
+            data = post_json(url, body, headers={"x-goog-api-key": key}, timeout=45, label=f"Gemini ({label})")
+            parts = data["candidates"][0]["content"]["parts"]
+            return "".join(p.get("text", "") for p in parts if not p.get("thought"))
+        except Exception as e:
+            errors.append(str(e)[:160])
+    raise RuntimeError(" | ".join(errors))
 
 
 def _call_github(system, user):
@@ -96,7 +113,9 @@ def _call_openai_compat(system, user):
     body = {"model": config.OPENAI_COMPAT_MODEL, "temperature": 0.2,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
     headers = {"Authorization": f"Bearer {config.OPENAI_COMPAT_API_KEY}"}
-    data = post_json(url, body, headers=headers, timeout=45, label="LLM")
+    data = post_json(url, body, headers=headers, timeout=45, label="GLM/compatible")
+    if not data.get("choices"):
+        raise RuntimeError(str(data)[:200])
     return data["choices"][0]["message"]["content"]
 
 
@@ -106,18 +125,26 @@ def review(payload, rules):
         return None
     try:
         system, user = _system_prompt(), _user_content(payload, rules)
-        call = {"github": _call_github, "anthropic": _call_anthropic, "gemini": _call_gemini}.get(config.LLM_PROVIDER, _call_openai_compat)
-        raw = call(system, user)
-        v = _extract_json(raw)
-        if v.get("rating") not in ORDER:
-            raise ValueError(f"rating inválido: {v.get('rating')}")
-        v["by"] = f"llm:{config.LLM_PROVIDER}"
-        return v
     except Exception as e:
-        global LAST_ERROR
-        LAST_ERROR = str(e)[:300]
-        log.warning("Estratega LLM falló: %s", e)
+        log.warning("prompt: %s", e)
         return None
+    global LAST_ERROR
+    errors = []
+    calls = {"github": _call_github, "anthropic": _call_anthropic, "gemini": _call_gemini,
+             "openai_compat": _call_openai_compat}
+    for prov in _available():
+        try:
+            v = _extract_json(calls.get(prov, _call_openai_compat)(system, user))
+            if v.get("rating") not in ORDER:
+                raise ValueError(f"rating inválido: {v.get('rating')}")
+            v["by"] = f"llm:{prov}"
+            LAST_ERROR = None
+            return v
+        except Exception as e:
+            errors.append(f"{prov}: {str(e)[:200]}")
+            log.warning("Estratega LLM (%s) falló: %s", prov, e)
+    LAST_ERROR = " | ".join(errors) or "sin proveedor con clave"
+    return None
 
 
 def combine(rules, llm):

@@ -67,10 +67,10 @@ def diagnose():
             v = estratega_llm.review(p, estratega_reglas.evaluate(p))
             if not v:
                 raise RuntimeError(estratega_llm.LAST_ERROR or "sin respuesta válida")
-            return f"{config.LLM_PROVIDER} → {v['rating']}"
+            return f"{v['by']} → {v['rating']}"
         check("LLM", llm_ping)
     else:
-        out.append(f"➖ LLM ({config.LLM_PROVIDER}): sin clave, solo reglas")
+        out.append("➖ LLM: sin clave gratuita configurada (GEMINI_API_KEY de AI Studio u OPENAI_COMPAT_API_KEY de Z.ai). Funciona solo con reglas")
     text = "\n".join(out)
     print(text)
     try:
