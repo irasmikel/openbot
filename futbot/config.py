@@ -18,8 +18,14 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 APIFOOTBALL_KEY = os.getenv("APIFOOTBALL_KEY", "")
 
-# LLM del Estratega: "gemini" | "openai_compat" (GLM, OpenRouter, Ollama...) | "none"
-LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+# LLM del Estratega (todos con opción gratuita salvo anthropic):
+#   "github"  -> GitHub Models, GRATIS y sin clave (usa el GITHUB_TOKEN de Actions)  [por defecto]
+#   "openai_compat" -> GLM de Z.ai u otro compatible · "gemini" -> AI Studio · "anthropic" -> de pago · "none"
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+GITHUB_MODEL = os.getenv("GITHUB_MODEL", "openai/gpt-4o-mini")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-5-5")
+LLM_PROVIDER = (os.getenv("LLM_PROVIDER") or "github").lower()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 OPENAI_COMPAT_BASE_URL = os.getenv("OPENAI_COMPAT_BASE_URL", "https://api.z.ai/api/paas/v4")

@@ -14,6 +14,10 @@ LAST_ERROR = None
 
 
 def enabled():
+    if config.LLM_PROVIDER == "github":
+        return bool(config.GITHUB_TOKEN)
+    if config.LLM_PROVIDER == "anthropic":
+        return bool(config.ANTHROPIC_API_KEY)
     if config.LLM_PROVIDER == "gemini":
         return bool(config.GEMINI_API_KEY)
     if config.LLM_PROVIDER == "openai_compat":
@@ -59,6 +63,25 @@ def _call_gemini(system, user):
     return "".join(p.get("text", "") for p in parts if not p.get("thought"))
 
 
+def _call_github(system, user):
+    """GitHub Models: gratis con el GITHUB_TOKEN de Actions (permiso models: read)."""
+    body = {"model": config.GITHUB_MODEL, "temperature": 0.2,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}]}
+    headers = {"Authorization": f"Bearer {config.GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+    data = post_json("https://models.github.ai/inference/chat/completions", body, headers=headers,
+                     timeout=45, label="GitHub Models")
+    return data["choices"][0]["message"]["content"]
+
+
+def _call_anthropic(system, user):
+    body = {"model": config.ANTHROPIC_MODEL, "max_tokens": 1000, "temperature": 0.2,
+            "system": system, "messages": [{"role": "user", "content": user}]}
+    headers = {"x-api-key": config.ANTHROPIC_API_KEY.strip(), "anthropic-version": "2023-06-01",
+               "content-type": "application/json"}
+    data = post_json("https://api.anthropic.com/v1/messages", body, headers=headers, timeout=45, label="Claude")
+    return "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text")
+
+
 def _call_openai_compat(system, user):
     url = config.OPENAI_COMPAT_BASE_URL.rstrip("/") + "/chat/completions"
     body = {"model": config.OPENAI_COMPAT_MODEL, "temperature": 0.2,
@@ -74,7 +97,8 @@ def review(payload, rules):
         return None
     try:
         system, user = _system_prompt(), _user_content(payload, rules)
-        raw = _call_gemini(system, user) if config.LLM_PROVIDER == "gemini" else _call_openai_compat(system, user)
+        call = {"github": _call_github, "anthropic": _call_anthropic, "gemini": _call_gemini}.get(config.LLM_PROVIDER, _call_openai_compat)
+        raw = call(system, user)
         v = _extract_json(raw)
         if v.get("rating") not in ORDER:
             raise ValueError(f"rating inválido: {v.get('rating')}")

@@ -50,11 +50,12 @@ def diagnose():
     espn_live = []
     check("ESPN programados hoy", lambda: f"{len(espn.scheduled_today())} partidos de las 7 competiciones")
     check("ESPN en vivo", lambda: f"{len(espn_live.extend(espn.live_events()) or espn_live)} partidos objetivo en juego")
-    sample = espn_live[0] if espn_live else next(iter(espn._EVENTS), None)
-    if sample:
-        mid = sample["match_id"] if isinstance(sample, dict) else sample
-        check(f"ESPN stats partido {mid}", lambda: json.dumps(espn.statistics(mid)["home"]))
-        check("ESPN cuotas", lambda: json.dumps(espn.odds(mid)["1x2"]))
+    check("ESPN cuotas en el listado", lambda: f"{len(espn._ODDS_FIRST)}/{len(espn._EVENTS)} partidos con cuota 1X2")
+    ids = [e["match_id"] for e in espn_live] or list(espn._EVENTS)
+    if ids:
+        mid = ids[0]
+        check(f"ESPN stats partido {mid}", lambda: json.dumps(espn.statistics(mid)["home"]) + " (vacías si no ha empezado)")
+        check("ESPN cuotas (summary)", lambda: json.dumps({k: v["initial"] for k, v in espn.odds(mid)["1x2"].items()}) or "{}")
     if apifootball.enabled():
         check("API-Football", lambda: f"{len(apifootball.fixtures_for_date())} partidos hoy · quedan {apifootball.remaining()} peticiones de presupuesto")
     else:

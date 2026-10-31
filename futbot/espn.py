@@ -210,10 +210,31 @@ def _parse_odds(comp):
     return {"1": one, "X": x, "2": two, "provider": (o.get("provider") or {}).get("name")}
 
 
+def _summary_odds(match_id):
+    """Si el scoreboard no trae cuotas, prueba en summary (pickcenter / odds)."""
+    comp_id = _LEAGUE_OF.get(match_id)
+    if not comp_id:
+        return None
+    data = get_json(f"{BASE}/{LEAGUES[comp_id]}/summary", params={"event": match_id}) or {}
+    for key in ("pickcenter", "odds"):
+        for o in data.get(key) or []:
+            parsed = _parse_odds({"odds": [o]})
+            if parsed:
+                return parsed
+    return None
+
+
 def odds(match_id):
     """Mismo formato que sofascore.odds: initial = primera cuota vista (pre-partido), current = la última."""
     ev = _EVENTS.get(match_id)
     cur = _parse_odds((ev.get("competitions") or [{}])[0]) if ev else None
+    if not cur and match_id not in _ODDS_FIRST:
+        try:
+            cur = _summary_odds(match_id)
+        except Exception as e:
+            log.warning("ESPN summary odds %s: %s", match_id, e)
+        if cur:
+            _ODDS_FIRST[match_id] = cur
     first = _ODDS_FIRST.get(match_id) or cur
     out = {"1x2": {}, "dc": {}, "ou": {}, "provider": (first or {}).get("provider")}
     if first:
